@@ -8,7 +8,6 @@ jinja2
 python-multipart
 passlib[bcrypt]
 python-dotenv
-mangum
 joblib
 catboost
 

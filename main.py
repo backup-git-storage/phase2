@@ -77,7 +77,6 @@ if APP_ENV == "production" and not COOKIE_SECURE:
         "Production session cookies must only be sent over HTTPS."
     )
 
-from mangum import Mangum
 from src.backend.database import Base, engine, get_db
 from src.backend.models import AuditLog, User
 from src.backend.auth import router as auth_router
@@ -506,9 +505,3 @@ async def admin_system_status(
 
 Base.metadata.create_all(bind=engine)
 
-
-# --------------------------------------------------
-# VERCEL ASGI HANDLER
-# --------------------------------------------------
-
-handler = Mangum(app)
