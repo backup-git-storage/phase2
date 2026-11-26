@@ -1,0 +1,102 @@
+AEDISIGHT Admin Dashboard - Stage 2
+===================================
+
+Scope
+-----
+This stage connects the existing admin dashboard controls and status panels to
+admin-protected backend APIs. It does not redesign the dashboard or modify the
+forecasting/training implementation.
+
+Files changed
+-------------
+main.py
+src/backend/models.py
+src/backend/auth.py
+src/backend/audit.py                  (new)
+templates/admin/admin_dashboard.html
+static/js/admin/admin.js
+static/css/admin/admin_dashboard.css
+tests/test_admin_api.py               (new)
+tests/test_admin_dashboard.py
+
+What changed
+------------
+1. Added admin-only, read-only JSON endpoints:
+   GET /api/admin/dashboard/summary
+   GET /api/admin/users?search=&role=&status=&limit=&offset=
+   GET /api/admin/activity?limit=
+   GET /api/admin/system-status
+
+2. User search and role/status filters now request filtered records from the
+   database. User API responses intentionally omit hashed_password.
+
+3. Dashboard statistic cards refresh from the summary API.
+
+4. Added an audit_logs table and best-effort audit recording for account
+   registration, successful sign-in, and sign-out. The activity panel reads
+   persisted audit records. Audit logging failures are rolled back and logged;
+   they do not fail registration/login/logout.
+
+5. System status reports observed database connectivity, processed dataset
+   presence/validity/freshness, compatible model horizons, and app version.
+   The raw dataset is reported as "Not configured" because this repository
+   contains the processed dataset but no raw dataset path. A stale dataset is
+   not described as current. Historical replay availability is distinguished
+   from current forecasting freshness.
+
+6. Existing navigation, mobile sidebar, logout form, search, and filters remain
+   in place. Logout continues to require the existing CSRF token.
+
+Repository inspection findings / explicit limits
+-------------------------------------------------
+- The supplied admin template contains no chart canvas, SVG chart, chart
+  container, chart library import, or chart initialization. Therefore there
+  are no existing charts to connect in this repository snapshot. No chart was
+  invented or populated with fabricated values.
+- The Settings section explicitly says no configuration controls are
+  connected; it contains no settings form or actionable setting control.
+  This stage does not invent new settings.
+- The existing user table has search and filters but no edit, deactivate,
+  delete, or role-change buttons. This stage does not add unrequested account
+  mutation controls.
+- Forecast/model/configuration events are not audited yet. The activity feed
+  currently records account registration, sign-in, and sign-out only.
+
+Security
+--------
+- Every /api/admin/* route uses the existing get_current_admin_user dependency.
+- Read-only GET APIs do not mutate server state, so they do not require CSRF
+  tokens. Existing state-changing logout still uses CSRF validation.
+- User JSON never includes password hashes.
+- DOM rendering uses textContent rather than injecting user-controlled values
+  through innerHTML.
+- Existing hospital dashboard and prediction route logic were not changed.
+
+Database note
+-------------
+The application already calls Base.metadata.create_all(bind=engine) at startup.
+The new audit_logs table is therefore created automatically on startup for a
+configured database. Existing users rows are not modified.
+
+Tests
+-----
+Added tests for summary counts, search/role/status filtering, safe user fields,
+audit feed, system status, unauthenticated access, and hospital-user denial.
+The admin API/dashboard/app/auth test selection passed 39 tests in this build.
+The environment lacked the installed 'mangum' and 'pwdlib' packages, so the
+local test run used temporary import stubs outside the project directory for
+those two imports. Install the repository requirements before relying on a
+normal local/CI test run. Existing sklearn model-version warnings were emitted
+by the prediction tests; no prediction code or model artifacts were changed.
+
+Recommended local verification
+------------------------------
+python -m pip install -r requirements.txt
+python -m pytest -q tests/test_admin_api.py tests/test_admin_dashboard.py tests/test_app.py tests/test_auth.py
+
+Then log in as an administrator and verify:
+- the four summary cards match the users table;
+- search, role, and status filters update the table;
+- account registration/sign-in/sign-out events appear in Platform activity;
+- database, dataset freshness, and model artifact statuses are reported;
+- a hospital user is redirected away from all admin APIs.

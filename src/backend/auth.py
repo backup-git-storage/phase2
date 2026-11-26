@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from src.backend.database import get_db
 from src.backend.models import User
+from src.backend.audit import record_audit_event
 
 from src.backend.security import (
     hash_password,
@@ -271,6 +272,10 @@ def register_user(
             error="Registration could not be completed. Please try again.",
         )
 
+    record_audit_event(
+        db, "user_registered", "A hospital account was registered.", new_user.id
+    )
+
     # 9. Reset session state and rotate CSRF token.
     request.session.clear()
     rotate_csrf_token(request)
@@ -344,6 +349,13 @@ def login_user(
     # 8. Generate a fresh CSRF token.
     rotate_csrf_token(request)
 
+    record_audit_event(
+        db,
+        "user_login",
+        "Administrator signed in." if user.is_admin else "Hospital user signed in.",
+        user.id,
+    )
+
     # 9. Determine dashboard using the database value.
     if user.is_admin:
         return RedirectResponse(
@@ -360,6 +372,7 @@ def login_user(
 def logout_user(
     request: Request,
     csrf_token: str = Form(...),
+    db: Session = Depends(get_db),
 ):
     """Log out the authenticated user."""
 
@@ -368,6 +381,17 @@ def logout_user(
         raise HTTPException(
             status_code=403,
             detail="Invalid security token.",
+        )
+
+    # Record the authenticated account before clearing its session.
+    user_id = request.session.get("user_id")
+    user = db.get(User, user_id) if type(user_id) is int else None
+    if user is not None:
+        record_audit_event(
+            db,
+            "user_logout",
+            "Administrator signed out." if user.is_admin else "Hospital user signed out.",
+            user.id,
         )
 
     # Remove all session data.

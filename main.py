@@ -14,8 +14,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # Load environment variables before importing database configuration.
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from sqlalchemy import func
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from fastapi.staticfiles import StaticFiles
@@ -79,7 +79,7 @@ if APP_ENV == "production" and not COOKIE_SECURE:
 
 from mangum import Mangum
 from src.backend.database import Base, engine, get_db
-from src.backend.models import User
+from src.backend.models import AuditLog, User
 from src.backend.auth import router as auth_router
 from src.backend.security import get_csrf_token, verify_csrf_token
 
@@ -96,6 +96,7 @@ from src.predict import (
     get_data_through,
     replay_origin_bounds,
     get_supported_areas,
+    DATA_PATH,
 )
 from src.feature_engineering import SUPPORTED_HORIZONS
 
@@ -339,6 +340,164 @@ async def admin_dashboard(
             "users": users,
         },
     )
+
+
+# --------------------------------------------------
+# ADMIN-ONLY JSON API
+# --------------------------------------------------
+
+
+def _user_payload(user: User) -> dict:
+    """Return only fields intended for the administrator user table."""
+    return {
+        "id": user.id,
+        "full_name": user.full_name,
+        "hospital_name": user.hospital_name,
+        "email": user.email,
+        "is_admin": bool(user.is_admin),
+        "is_active": bool(user.is_active),
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+@app.get("/api/admin/dashboard/summary")
+async def admin_dashboard_summary(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Return live account totals for the administrator dashboard."""
+    return {
+        "total_users": db.query(func.count(User.id)).scalar() or 0,
+        "active_hospital_accounts": (
+            db.query(func.count(User.id))
+            .filter(User.is_admin.is_(False), User.is_active.is_(True))
+            .scalar() or 0
+        ),
+        "administrator_accounts": (
+            db.query(func.count(User.id))
+            .filter(User.is_admin.is_(True))
+            .scalar() or 0
+        ),
+        "inactive_accounts": (
+            db.query(func.count(User.id))
+            .filter(User.is_active.is_(False))
+            .scalar() or 0
+        ),
+    }
+
+
+@app.get("/api/admin/users")
+async def admin_list_users(
+    search: str = Query(default="", max_length=255),
+    role: str = Query(default="", pattern="^(|admin|hospital)$"),
+    status_filter: str = Query(default="", alias="status", pattern="^(|active|inactive)$"),
+    limit: int = Query(default=500, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Search and filter user accounts without exposing password hashes."""
+    query = db.query(User)
+    term = search.strip().casefold()
+    if term:
+        pattern = f"%{term}%"
+        query = query.filter(
+            func.lower(User.full_name).like(pattern)
+            | func.lower(User.hospital_name).like(pattern)
+            | func.lower(User.email).like(pattern)
+        )
+    if role == "admin":
+        query = query.filter(User.is_admin.is_(True))
+    elif role == "hospital":
+        query = query.filter(User.is_admin.is_(False))
+    if status_filter == "active":
+        query = query.filter(User.is_active.is_(True))
+    elif status_filter == "inactive":
+        query = query.filter(User.is_active.is_(False))
+
+    total = query.count()
+    records = (
+        query.order_by(User.created_at.desc(), User.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "users": [_user_payload(user) for user in records],
+    }
+
+
+@app.get("/api/admin/activity")
+async def admin_recent_activity(
+    limit: int = Query(default=20, ge=1, le=50),
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Return persisted, non-sensitive audit events newest first."""
+    events = (
+        db.query(AuditLog)
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "events": [
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "description": event.description,
+                "timestamp": event.created_at.isoformat(),
+            }
+            for event in events
+        ]
+    }
+
+
+@app.get("/api/admin/system-status")
+async def admin_system_status(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Report observed database, dataset, and model-artifact availability."""
+    try:
+        db.execute(text("SELECT 1"))
+        database_status = "available"
+    except Exception:
+        database_status = "unavailable"
+
+    processed_status = "missing"
+    data_through = None
+    freshness_status = "unknown"
+    if DATA_PATH.is_file():
+        processed_status = "available"
+        try:
+            freshness = data_freshness()
+            data_through = freshness.get("dataThrough")
+            freshness_status = freshness.get("status", "unknown")
+        except Exception:
+            processed_status = "invalid"
+            freshness_status = "invalid"
+
+    try:
+        available_horizons = get_available_horizons()
+    except Exception:
+        available_horizons = []
+
+    return {
+        "backend": "available",
+        "database": database_status,
+        "raw_dataset": "not_configured",
+        "processed_dataset": processed_status,
+        "data_through": data_through,
+        "data_freshness": freshness_status,
+        "model_artifacts": "available" if available_horizons else "unavailable",
+        "available_horizons": available_horizons,
+        "prediction_service": "available" if available_horizons else "unavailable",
+        "application_version": app.version,
+    }
 
 
 # --------------------------------------------------

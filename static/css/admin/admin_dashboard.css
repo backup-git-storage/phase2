@@ -142,3 +142,8 @@ tbody tr[hidden]{display:none}
   .settings-empty{min-height:180px}
   .dashboard-footer{flex-direction:column;gap:7px}
 }
+
+/* Live backend health states; layout remains unchanged. */
+.status-label.available { color: #9ed7b5; background: rgba(80, 170, 118, .12); }
+.monitor-row b.available-text { color: #9ed7b5; }
+.monitor-dot.available-dot { background: #63bd88; }

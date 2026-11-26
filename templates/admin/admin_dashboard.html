@@ -17,8 +17,8 @@
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap"
     rel="stylesheet"
   >
-  <link rel="stylesheet" href="/static/css/admin/admin_dashboard.css?v=2">
-  <script src="/static/js/admin/admin.js?v=2" defer></script>
+  <link rel="stylesheet" href="/static/css/admin/admin_dashboard.css?v=3">
+  <script src="/static/js/admin/admin.js?v=3" defer></script>
 </head>
 
 <body class="dashboard-page">
@@ -127,7 +127,7 @@
         <article class="stat-card">
           <div>
             <span class="stat-label">Total registered users</span>
-            <strong class="stat-value">
+            <strong class="stat-value" id="statTotalUsers">
               {{ total_users if total_users is defined and total_users is not none else '—' }}
             </strong>
             <small>{{ 'Current platform count' if total_users is defined and total_users is not none else 'Awaiting backend data' }}</small>
@@ -138,7 +138,7 @@
         <article class="stat-card">
           <div>
             <span class="stat-label">Active hospital accounts</span>
-            <strong class="stat-value">
+            <strong class="stat-value" id="statActiveHospitals">
               {{ active_hospital_accounts if active_hospital_accounts is defined and active_hospital_accounts is not none else '—' }}
             </strong>
             <small>{{ 'Current active count' if active_hospital_accounts is defined and active_hospital_accounts is not none else 'Awaiting backend data' }}</small>
@@ -149,7 +149,7 @@
         <article class="stat-card">
           <div>
             <span class="stat-label">Administrator accounts</span>
-            <strong class="stat-value">
+            <strong class="stat-value" id="statAdministrators">
               {{ administrator_accounts if administrator_accounts is defined and administrator_accounts is not none else '—' }}
             </strong>
             <small>{{ 'Current administrator count' if administrator_accounts is defined and administrator_accounts is not none else 'Awaiting backend data' }}</small>
@@ -160,7 +160,7 @@
         <article class="stat-card">
           <div>
             <span class="stat-label">Inactive accounts</span>
-            <strong class="stat-value">
+            <strong class="stat-value" id="statInactiveAccounts">
               {{ inactive_accounts if inactive_accounts is defined and inactive_accounts is not none else '—' }}
             </strong>
             <small>{{ 'Current inactive count' if inactive_accounts is defined and inactive_accounts is not none else 'Awaiting backend data' }}</small>
@@ -272,7 +272,7 @@
           <div class="activity-empty" id="activityEmpty">
             <span class="empty-icon" aria-hidden="true">◎</span>
             <h3>No platform activity records available yet</h3>
-            <p>Registration, dataset, model, forecast, and configuration events will appear after audit-log integration.</p>
+            <p>Account registration, sign-in, and sign-out events are recorded here. Forecasting and configuration changes are not currently audited.</p>
           </div>
 
           <div class="activity-list" id="activityList" {% if platform_activity is not defined or not platform_activity %}hidden{% endif %}>
@@ -312,7 +312,7 @@
             <span class="panel-kicker">04 · FORECASTING SYSTEM</span>
             <h2 id="ai-title">AI and dengue forecasting overview</h2>
           </div>
-          <span class="panel-badge">Backend status required</span>
+          <span class="panel-badge" id="aiStatusBadge">Checking model artifacts…</span>
         </div>
 
         <div class="system-card-grid">
@@ -320,42 +320,42 @@
             <span class="system-card-icon" aria-hidden="true">▧</span>
             <div>
               <h3>Raw dataset</h3>
-              <span class="status-label unknown">Unknown</span>
+              <span class="status-label unknown" id="rawDatasetStatus">Checking…</span>
             </div>
           </article>
           <article class="system-card">
             <span class="system-card-icon" aria-hidden="true">▦</span>
             <div>
               <h3>Processed dataset</h3>
-              <span class="status-label unknown">Unknown</span>
+              <span class="status-label unknown" id="processedDatasetStatus">Checking…</span>
             </div>
           </article>
           <article class="system-card">
             <span class="system-card-icon" aria-hidden="true">◉</span>
             <div>
               <h3>Model training</h3>
-              <span class="status-label pending">Pending</span>
+              <span class="status-label unknown" id="modelTrainingStatus">Checking…</span>
             </div>
           </article>
           <article class="system-card">
             <span class="system-card-icon" aria-hidden="true">2W</span>
             <div>
               <h3>Two-week model</h3>
-              <span class="status-label not-connected">Not connected</span>
+              <span class="status-label unknown" id="model2wStatus">Checking…</span>
             </div>
           </article>
           <article class="system-card">
             <span class="system-card-icon" aria-hidden="true">4W</span>
             <div>
               <h3>Four-week model</h3>
-              <span class="status-label not-connected">Not connected</span>
+              <span class="status-label unknown" id="model4wStatus">Checking…</span>
             </div>
           </article>
           <article class="system-card">
             <span class="system-card-icon" aria-hidden="true">⇄</span>
             <div>
               <h3>Prediction API</h3>
-              <span class="status-label unavailable">Unavailable</span>
+              <span class="status-label unknown" id="predictionApiStatus">Checking…</span>
             </div>
           </article>
         </div>
@@ -367,29 +367,29 @@
             <span class="panel-kicker">05 · SYSTEM MONITORING</span>
             <h2 id="monitoring-title">Service status</h2>
           </div>
-          <span class="panel-badge">No health check connected</span>
+          <span class="panel-badge" id="systemStatusBadge">Checking services…</span>
         </div>
 
         <div class="monitor-list">
           <div class="monitor-row">
-            <span><i class="monitor-dot unknown-dot" aria-hidden="true"></i>Backend availability</span>
-            <b class="unknown-text">Unknown</b>
+            <span><i class="monitor-dot unknown-dot" id="backendDot" aria-hidden="true"></i>Backend availability</span>
+            <b class="unknown-text" id="backendStatus">Checking…</b>
           </div>
           <div class="monitor-row">
-            <span><i class="monitor-dot unknown-dot" aria-hidden="true"></i>Database connection</span>
-            <b class="unknown-text">Unknown</b>
+            <span><i class="monitor-dot unknown-dot" id="databaseDot" aria-hidden="true"></i>Database connection</span>
+            <b class="unknown-text" id="databaseStatus">Checking…</b>
           </div>
           <div class="monitor-row">
-            <span><i class="monitor-dot unknown-dot" aria-hidden="true"></i>Dataset pipeline</span>
-            <b class="unknown-text">Unknown</b>
+            <span><i class="monitor-dot unknown-dot" id="datasetDot" aria-hidden="true"></i>Dataset pipeline</span>
+            <b class="unknown-text" id="datasetStatus">Checking…</b>
           </div>
           <div class="monitor-row">
-            <span><i class="monitor-dot unknown-dot" aria-hidden="true"></i>Forecasting service</span>
-            <b class="unknown-text">Not connected</b>
+            <span><i class="monitor-dot unknown-dot" id="forecastDot" aria-hidden="true"></i>Forecasting service</span>
+            <b class="unknown-text" id="forecastStatus">Checking…</b>
           </div>
           <div class="monitor-row">
             <span><i class="monitor-dot info-dot" aria-hidden="true"></i>Application version</span>
-            <b>1.0.0</b>
+            <b id="applicationVersion">—</b>
           </div>
         </div>
       </section>

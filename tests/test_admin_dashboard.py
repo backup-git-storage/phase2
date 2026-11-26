@@ -132,7 +132,7 @@ def test_admin_dashboard_renders_live_database_statistics_and_accounts(
 
     # Values are rendered in the statistic cards, not the previous placeholders.
     rendered_stats = re.findall(
-        r'<strong class="stat-value">\s*(\d+)\s*</strong>', html
+        r'<strong class="stat-value"[^>]*>\s*(\d+)\s*</strong>', html
     )
     assert rendered_stats == ["4", "1", "2", "2"]
 
