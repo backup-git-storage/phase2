@@ -136,3 +136,7 @@ vercel.json
 ```
 
 The processed CSV is copied with CRLF line endings normalized to LF in the temporary clone; its 31,080 rows and field values are unchanged. Two files also have trailing blank lines removed in that clone for a clean Git whitespace check. The payload excludes root `README.md`, root `ARCHITECTURE.md`, `CODEX_HANDOFF.md`, `.env`, local databases, raw/monthly/duplicate data, old root models/results, staging/partial runs, caches, logs, and build/virtual-environment files. The destination’s existing root README is preserved byte-for-byte.
+
+### Follow-up: local run instructions
+
+`RUNNING.md` was added after the initial application publication. It documents VS Code integrated-terminal setup and launch commands for Linux Bash, Windows PowerShell, and Windows Command Prompt; local `.env` and secret setup; virtual-environment creation; the local URL and stop command; and the stale-data limitation. The authorized follow-up publication adds `RUNNING.md` and updates this report. The final destination tree therefore contains the initial 58 application files plus `RUNNING.md`, along with the byte-for-byte preserved destination README.
