@@ -1,0 +1,28 @@
+AEDISIGHT Admin Dashboard - Stage 1
+
+Files to replace/add:
+1. Replace main.py at the repository root.
+2. Add tests/test_admin_dashboard.py in the repository's tests/ directory.
+
+What changed:
+- The /admin_dashboard route now obtains a SQLAlchemy Session through the existing get_db dependency.
+- It calculates total registered users, active hospital accounts, administrator accounts, and inactive accounts from the users table.
+- It fetches user records ordered by registration time (newest first) and passes them to the existing Jinja template.
+- It continues to use get_current_admin_user and get_csrf_token; no authentication or CSRF checks were removed.
+- The template receives ORM User objects, but only the existing safe display fields are rendered. Password hashes are not passed as separate context values or rendered.
+
+Statistics definitions:
+- Total registered users: all rows in users.
+- Active hospital accounts: is_admin = false AND is_active = true.
+- Administrator accounts: all rows where is_admin = true (active and inactive).
+- Inactive accounts: all rows where is_active = false.
+
+Testing:
+- Added an isolated SQLite integration test with four actual test records, including active/inactive hospital and administrator accounts.
+- Added a test that unauthenticated requests are redirected to /login.
+- Python syntax compilation passed for both changed Python files.
+- The pytest run could not be completed in this execution environment because project dependencies mangum and pwdlib are not installed and package installation is unavailable (network/DNS access failed). Run the test commands locally in the project's installed environment:
+
+  python -m pytest -q tests/test_admin_dashboard.py tests/test_app.py tests/test_auth.py
+
+No frontend, prediction, training, database schema, or deployment files were changed in Stage 1.

@@ -15,6 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -76,7 +78,7 @@ if APP_ENV == "production" and not COOKIE_SECURE:
     )
 
 from mangum import Mangum
-from src.backend.database import Base, engine
+from src.backend.database import Base, engine, get_db
 from src.backend.models import User
 from src.backend.auth import router as auth_router
 from src.backend.security import get_csrf_token, verify_csrf_token
@@ -288,9 +290,41 @@ async def user_dashboard(
 async def admin_dashboard(
     request: Request,
     current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
 ):
+    """Render the admin dashboard using live account records from the database."""
 
     csrf_token = get_csrf_token(request)
+
+    # Keep the dashboard statistics aligned with the same users table shown below.
+    # Hospital accounts exclude administrators; administrator count includes both
+    # active and inactive administrator accounts.
+    total_users = db.query(func.count(User.id)).scalar() or 0
+    active_hospital_accounts = (
+        db.query(func.count(User.id))
+        .filter(User.is_admin.is_(False), User.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+    administrator_accounts = (
+        db.query(func.count(User.id))
+        .filter(User.is_admin.is_(True))
+        .scalar()
+        or 0
+    )
+    inactive_accounts = (
+        db.query(func.count(User.id))
+        .filter(User.is_active.is_(False))
+        .scalar()
+        or 0
+    )
+
+    # Do not expose password hashes or other internal fields to the template.
+    users = (
+        db.query(User)
+        .order_by(User.created_at.desc(), User.id.desc())
+        .all()
+    )
 
     return templates.TemplateResponse(
         request=request,
@@ -298,6 +332,11 @@ async def admin_dashboard(
         context={
             "current_user": current_user,
             "csrf_token": csrf_token,
+            "total_users": total_users,
+            "active_hospital_accounts": active_hospital_accounts,
+            "administrator_accounts": administrator_accounts,
+            "inactive_accounts": inactive_accounts,
+            "users": users,
         },
     )
 
