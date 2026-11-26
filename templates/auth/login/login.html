@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta name="description" content="AEDISIGHT secure login">
+
+    <title>AEDISIGHT | Login</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="/static/css/login/login.css?v=2">
+
+    <script src="/static/js/login/login.js?v=2" defer></script>
+</head>
+
+<body class="auth-page">
+
+    <div class="auth-orb orb-a"></div>
+    <div class="auth-orb orb-b"></div>
+    <div class="auth-orb orb-c"></div>
+
+    <!-- BACK TO HOME -->
+
+    <a class="back-home" href="/">
+        <span class="back-icon">←</span>
+        <span>Back to Home</span>
+    </a>
+
+    <main class="auth-shell">
+
+        <section class="glass-card">
+
+            <!-- AEDISIGHT BRAND -->
+
+            <a class="auth-brand" href="/" aria-label="AEDISIGHT home">
+
+                <span class="brand-symbol">
+                    <svg viewBox="0 0 48 48" role="img" aria-hidden="true">
+                        <path d="M8 37 L23 8 L40 37"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="4"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"/>
+                        <path d="M15 27 H33"
+                              fill="none"
+                              stroke="#D96B7D"
+                              stroke-width="4"
+                              stroke-linecap="round"/>
+                        <circle cx="24" cy="37" r="3" fill="#D96B7D"/>
+                    </svg>
+                </span>
+
+                <span class="brand-copy">
+                    <strong>AEDISIGHT</strong>
+                    <small>HEALTH INTELLIGENCE</small>
+                </span>
+
+            </a>
+
+            <!-- HEADER -->
+
+            <div class="auth-header">
+
+                <span class="auth-kicker">
+                    SECURE ACCESS
+                </span>
+
+                <h1>Welcome back.</h1>
+
+                <p>
+                    Sign in to continue to your AEDISIGHT workspace.
+                </p>
+
+            </div>
+
+            <!-- LOGIN FORM -->
+
+            <form id="loginForm" action="/login" method="post">
+
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="{{ csrf_token }}"
+                >
+
+                <div class="field">
+
+                    <label for="email">Email address</label>
+
+                    <input
+                        id="email"
+                        name="email"
+                        type="email"
+                        placeholder="you@example.com"
+                        autocomplete="email"
+                        maxlength="255"
+                        required
+                    >
+
+                </div>
+
+                <div class="field">
+
+                    <label for="password">Password</label>
+
+                    <div class="password-wrap">
+
+                        <input
+                            id="password"
+                            name="password"
+                            type="password"
+                            placeholder="Enter your password"
+                            autocomplete="current-password"
+                            minlength="8"
+                            maxlength="128"
+                            required
+                        >
+
+                        <button
+                            class="password-toggle"
+                            type="button"
+                            data-target="password"
+                            aria-label="Show password"
+                            aria-controls="password"
+                        >
+                            Show
+                        </button>
+
+                    </div>
+
+                </div>
+
+                <button class="submit-btn" type="submit">
+                    <span>Sign in</span>
+                    <span class="submit-arrow">→</span>
+                </button>
+
+                <p
+                    class="form-status"
+                    id="formStatus"
+                    role="status"
+                    aria-live="polite"
+                >
+                    {% if request.query_params.get('message') %}
+                        {{ request.query_params.get('message') }}
+                    {% elif request.query_params.get('error') %}
+                        {{ request.query_params.get('error') }}
+                    {% endif %}
+                </p>
+
+            </form>
+
+            <!-- REGISTER LINK -->
+
+            <div class="auth-switch">
+                Don't have an account?
+                <a href="/register">Create one</a>
+            </div>
+
+        </section>
+
+    </main>
+
+</body>
+</html>

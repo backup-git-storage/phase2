@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta
+    name="description"
+    content="AEDISIGHT administration console for platform, account, and dengue forecasting oversight."
+  >
+
+  <title>AEDISIGHT — Admin Console</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap"
+    rel="stylesheet"
+  >
+  <link rel="stylesheet" href="/static/css/admin/admin_dashboard.css?v=2">
+  <script src="/static/js/admin/admin.js?v=2" defer></script>
+</head>
+
+<body class="dashboard-page">
+  <button
+    class="sidebar-backdrop"
+    id="sidebarBackdrop"
+    type="button"
+    aria-label="Close navigation menu"
+    tabindex="-1"
+  ></button>
+
+  <aside class="sidebar" id="sidebar" aria-label="Admin navigation">
+    <a class="dash-brand" href="/" aria-label="AEDISIGHT home">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span class="brand-copy">
+        <strong>AEDISIGHT</strong>
+        <small>ADMIN CONSOLE</small>
+      </span>
+    </a>
+
+    <span class="side-label">PLATFORM</span>
+    <nav class="side-nav" aria-label="Platform">
+      <a class="active" href="#overview" aria-current="page">
+        <span aria-hidden="true">◈</span>
+        Overview
+      </a>
+      <a href="#users">
+        <span aria-hidden="true">◫</span>
+        User management
+      </a>
+      <a href="#activity">
+        <span aria-hidden="true">◎</span>
+        Platform activity
+      </a>
+      <a href="#ai-system">
+        <span aria-hidden="true">▣</span>
+        AI system status
+      </a>
+    </nav>
+
+    <span class="side-label">SYSTEM</span>
+    <nav class="side-nav" aria-label="System">
+      <a href="#system-status">
+        <span aria-hidden="true">◉</span>
+        System status
+      </a>
+      <a href="#settings">
+        <span aria-hidden="true">⚙</span>
+        Settings
+      </a>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <div class="profile-mini">
+        <span class="profile-avatar" aria-hidden="true">
+          {{ current_user.full_name[:2]|upper }}
+        </span>
+        <div class="profile-copy">
+          <strong>{{ current_user.full_name }}</strong>
+          <small>Administrator</small>
+        </div>
+      </div>
+
+      <form action="/logout" method="post" class="logout-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="logout">
+          <span aria-hidden="true">↪</span>
+          Sign out
+        </button>
+      </form>
+    </div>
+  </aside>
+
+  <main class="dashboard-main">
+    <div class="dashboard-shell" id="overview">
+      <header class="dash-header">
+        <button
+          class="mobile-menu"
+          id="mobileMenu"
+          type="button"
+          aria-label="Open navigation menu"
+          aria-controls="sidebar"
+          aria-expanded="false"
+        >
+          <span aria-hidden="true">☰</span>
+        </button>
+
+        <div class="header-copy">
+          <span class="dash-kicker">ADMIN CONSOLE</span>
+          <h1>Welcome, {{ current_user.full_name }}.</h1>
+          <p>Platform and forecasting administration</p>
+        </div>
+
+        <div class="header-profile" aria-label="Administrator profile">
+          <div>
+            <strong>{{ current_user.full_name }}</strong>
+            <span>Administrator</span>
+          </div>
+          <span class="header-avatar" aria-hidden="true">
+            {{ current_user.full_name[:2]|upper }}
+          </span>
+        </div>
+      </header>
+
+      <section class="stat-grid" aria-label="Platform statistics">
+        <article class="stat-card">
+          <div>
+            <span class="stat-label">Total registered users</span>
+            <strong class="stat-value">
+              {{ total_users if total_users is defined and total_users is not none else '—' }}
+            </strong>
+            <small>{{ 'Current platform count' if total_users is defined and total_users is not none else 'Awaiting backend data' }}</small>
+          </div>
+          <span class="stat-icon" aria-hidden="true">◉</span>
+        </article>
+
+        <article class="stat-card">
+          <div>
+            <span class="stat-label">Active hospital accounts</span>
+            <strong class="stat-value">
+              {{ active_hospital_accounts if active_hospital_accounts is defined and active_hospital_accounts is not none else '—' }}
+            </strong>
+            <small>{{ 'Current active count' if active_hospital_accounts is defined and active_hospital_accounts is not none else 'Awaiting backend data' }}</small>
+          </div>
+          <span class="stat-icon" aria-hidden="true">◇</span>
+        </article>
+
+        <article class="stat-card">
+          <div>
+            <span class="stat-label">Administrator accounts</span>
+            <strong class="stat-value">
+              {{ administrator_accounts if administrator_accounts is defined and administrator_accounts is not none else '—' }}
+            </strong>
+            <small>{{ 'Current administrator count' if administrator_accounts is defined and administrator_accounts is not none else 'Awaiting backend data' }}</small>
+          </div>
+          <span class="stat-icon" aria-hidden="true">◈</span>
+        </article>
+
+        <article class="stat-card">
+          <div>
+            <span class="stat-label">Inactive accounts</span>
+            <strong class="stat-value">
+              {{ inactive_accounts if inactive_accounts is defined and inactive_accounts is not none else '—' }}
+            </strong>
+            <small>{{ 'Current inactive count' if inactive_accounts is defined and inactive_accounts is not none else 'Awaiting backend data' }}</small>
+          </div>
+          <span class="stat-icon" aria-hidden="true">○</span>
+        </article>
+      </section>
+
+      <section class="panel user-panel" id="users" aria-labelledby="users-title">
+        <div class="panel-head">
+          <div>
+            <span class="panel-kicker">01 · ACCOUNT ADMINISTRATION</span>
+            <h2 id="users-title">User management</h2>
+          </div>
+          <span class="panel-badge" id="userCountBadge">No records loaded</span>
+        </div>
+
+        <div class="table-tools" aria-label="User table controls">
+          <div class="search-field">
+            <label for="userSearch">Search users</label>
+            <input
+              id="userSearch"
+              type="search"
+              placeholder="Name, hospital, or email"
+              autocomplete="off"
+            >
+          </div>
+
+          <div class="filter-field">
+            <label for="roleFilter">Role</label>
+            <select id="roleFilter">
+              <option value="">All roles</option>
+              <option value="hospital">Hospital User</option>
+              <option value="admin">Administrator</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="statusFilter">Status</label>
+            <select id="statusFilter">
+              <option value="">All statuses</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="table-wrap" id="userTableWrap"{% if users is not defined or not users %} hidden{% endif %}>
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Full name</th>
+                <th scope="col">Hospital</th>
+                <th scope="col">Email</th>
+                <th scope="col">Role</th>
+                <th scope="col">Status</th>
+                <th scope="col">Registered</th>
+              </tr>
+            </thead>
+            <tbody id="userTableBody">
+              {% set user_records = users if users is defined else [] %}
+              {% for user in user_records %}
+              <tr
+                data-name="{{ user.full_name|default('', true)|lower|e }}"
+                data-hospital="{{ user.hospital_name|default('', true)|lower|e }}"
+                data-email="{{ user.email|default('', true)|lower|e }}"
+                data-role="{{ 'admin' if user.is_admin else 'hospital' }}"
+                data-status="{{ 'active' if user.is_active else 'inactive' }}"
+              >
+                <td data-label="Full name">{{ user.full_name }}</td>
+                <td data-label="Hospital">{{ user.hospital_name }}</td>
+                <td data-label="Email">{{ user.email }}</td>
+                <td data-label="Role">
+                  <span class="role-badge {{ 'admin-role' if user.is_admin else 'hospital-role' }}">
+                    {{ 'Administrator' if user.is_admin else 'Hospital User' }}
+                  </span>
+                </td>
+                <td data-label="Status">
+                  <span class="status-badge {{ 'active-status' if user.is_active else 'inactive-status' }}">
+                    {{ 'Active' if user.is_active else 'Inactive' }}
+                  </span>
+                </td>
+                <td data-label="Registered">{{ user.created_at.strftime('%d %b %Y') if user.created_at else 'Unknown' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="table-empty" id="userTableEmpty"{% if users is defined and users %} hidden{% endif %}>
+          <span class="empty-icon" aria-hidden="true">◫</span>
+          <h3>No user records available</h3>
+          <p>User details will appear here when the backend provides the account list.</p>
+        </div>
+        <p class="filtered-empty" id="filteredEmpty" hidden>
+          No users match the current search and filters.
+        </p>
+      </section>
+
+      <section class="admin-grid">
+        <article class="panel activity-panel" id="activity" aria-labelledby="activity-title">
+          <div class="panel-head">
+            <div>
+              <span class="panel-kicker">02 · AUDIT HISTORY</span>
+              <h2 id="activity-title">Recent platform activity</h2>
+            </div>
+          </div>
+
+          <div class="activity-empty" id="activityEmpty">
+            <span class="empty-icon" aria-hidden="true">◎</span>
+            <h3>No platform activity records available yet</h3>
+            <p>Registration, dataset, model, forecast, and configuration events will appear after audit-log integration.</p>
+          </div>
+
+          <div class="activity-list" id="activityList" {% if platform_activity is not defined or not platform_activity %}hidden{% endif %}>
+            {% set activity_records = platform_activity if platform_activity is defined else [] %}
+            {% for event in activity_records %}
+            <article class="activity-event">
+              <span class="activity-dot" aria-hidden="true"></span>
+              <div>
+                <strong>{{ event.description }}</strong>
+                <time datetime="{{ event.timestamp }}">{{ event.timestamp }}</time>
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+        </article>
+
+        <article class="panel settings-panel" id="settings" aria-labelledby="settings-title">
+          <div class="panel-head">
+            <div>
+              <span class="panel-kicker">03 · ADMINISTRATION</span>
+              <h2 id="settings-title">Platform settings</h2>
+            </div>
+          </div>
+          <div class="settings-empty">
+            <span class="settings-symbol" aria-hidden="true">⚙</span>
+            <div>
+              <h3>Settings overview</h3>
+              <p>No configuration controls are connected. Account and platform changes remain managed through the existing backend.</p>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel ai-panel" id="ai-system" aria-labelledby="ai-title">
+        <div class="panel-head">
+          <div>
+            <span class="panel-kicker">04 · FORECASTING SYSTEM</span>
+            <h2 id="ai-title">AI and dengue forecasting overview</h2>
+          </div>
+          <span class="panel-badge">Backend status required</span>
+        </div>
+
+        <div class="system-card-grid">
+          <article class="system-card">
+            <span class="system-card-icon" aria-hidden="true">▧</span>
+            <div>
+              <h3>Raw dataset</h3>
+              <span class="status-label unknown">Unknown</span>
+            </div>
+          </article>
+          <article class="system-card">
+            <span class="system-card-icon" aria-hidden="true">▦</span>
+            <div>
+              <h3>Processed dataset</h3>
+              <span class="status-label unknown">Unknown</span>
+            </div>
+          </article>
+          <article class="system-card">
+            <span class="system-card-icon" aria-hidden="true">◉</span>
+            <div>
+              <h3>Model training</h3>
+              <span class="status-label pending">Pending</span>
+            </div>
+          </article>
+          <article class="system-card">
+            <span class="system-card-icon" aria-hidden="true">2W</span>
+            <div>
+              <h3>Two-week model</h3>
+              <span class="status-label not-connected">Not connected</span>
+            </div>
+          </article>
+          <article class="system-card">
+            <span class="system-card-icon" aria-hidden="true">4W</span>
+            <div>
+              <h3>Four-week model</h3>
+              <span class="status-label not-connected">Not connected</span>
+            </div>
+          </article>
+          <article class="system-card">
+            <span class="system-card-icon" aria-hidden="true">⇄</span>
+            <div>
+              <h3>Prediction API</h3>
+              <span class="status-label unavailable">Unavailable</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel monitoring-panel" id="system-status" aria-labelledby="monitoring-title">
+        <div class="panel-head">
+          <div>
+            <span class="panel-kicker">05 · SYSTEM MONITORING</span>
+            <h2 id="monitoring-title">Service status</h2>
+          </div>
+          <span class="panel-badge">No health check connected</span>
+        </div>
+
+        <div class="monitor-list">
+          <div class="monitor-row">
+            <span><i class="monitor-dot unknown-dot" aria-hidden="true"></i>Backend availability</span>
+            <b class="unknown-text">Unknown</b>
+          </div>
+          <div class="monitor-row">
+            <span><i class="monitor-dot unknown-dot" aria-hidden="true"></i>Database connection</span>
+            <b class="unknown-text">Unknown</b>
+          </div>
+          <div class="monitor-row">
+            <span><i class="monitor-dot unknown-dot" aria-hidden="true"></i>Dataset pipeline</span>
+            <b class="unknown-text">Unknown</b>
+          </div>
+          <div class="monitor-row">
+            <span><i class="monitor-dot unknown-dot" aria-hidden="true"></i>Forecasting service</span>
+            <b class="unknown-text">Not connected</b>
+          </div>
+          <div class="monitor-row">
+            <span><i class="monitor-dot info-dot" aria-hidden="true"></i>Application version</span>
+            <b>1.0.0</b>
+          </div>
+        </div>
+      </section>
+
+      <footer class="dashboard-footer">
+        <span>AEDISIGHT · Platform administration</span>
+        <span>Dengue forecasting status is shown only after backend verification.</span>
+      </footer>
+    </div>
+  </main>
+</body>
+
+</html>

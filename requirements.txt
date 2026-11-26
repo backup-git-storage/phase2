@@ -1,0 +1,29 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+pandas
+scikit-learn
+jinja2
+python-multipart
+passlib[bcrypt]
+python-dotenv
+mangum
+joblib
+catboost
+
+# Database migrations
+alembic
+
+# Password security
+pwdlib[argon2]
+
+# Session security
+itsdangerous
+
+# Email validation
+email-validator
+
+# Testing
+pytest
+httpx
