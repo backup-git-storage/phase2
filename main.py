@@ -2,6 +2,8 @@
 """FastAPI application entry point for DengueGuard."""
 
 import os
+import logging
+import uuid
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -86,18 +88,24 @@ from src.backend.dependencies import (
     get_current_hospital_user,
     get_current_admin_user,
 )
-from src.predict import (
-    ForecastUnavailableError,
-    ModelUnavailableError,
-    data_freshness,
-    generate_forecast,
-    get_available_horizons,
-    get_data_through,
-    replay_origin_bounds,
-    get_supported_areas,
-    DATA_PATH,
-)
+PREDICTION_BACKEND = os.getenv("PREDICTION_BACKEND", "reference_catboost").strip().lower()
+if PREDICTION_BACKEND == "reference_catboost":
+    from src.reference_catboost_predict import (
+        ForecastUnavailableError, ModelUnavailableError, data_freshness,
+        generate_forecast, get_available_horizons, get_data_through,
+        get_supported_date_bounds, get_supported_areas, DATA_PATH,
+    )
+elif PREDICTION_BACKEND == "phase2":
+    from src.predict import (
+        ForecastUnavailableError, ModelUnavailableError, data_freshness,
+        generate_forecast, get_available_horizons, get_data_through,
+        get_supported_date_bounds, get_supported_areas, DATA_PATH,
+    )
+else:
+    raise RuntimeError("PREDICTION_BACKEND must be 'reference_catboost' or 'phase2'.")
 from src.feature_engineering import SUPPORTED_HORIZONS
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------
@@ -145,6 +153,7 @@ class ForecastRequest(BaseModel):
     ward: str = Field(min_length=1, max_length=100)
     horizonWeeks: int = Field(ge=2, le=4)
     asOf: Optional[date] = None
+    strictEvaluation: bool = False
 
 
 @app.post("/api/predict")
@@ -155,6 +164,7 @@ async def predict_ward(
     current_user: User = Depends(get_current_hospital_user),
 ):
     """Serve an authenticated forecast from the selected trained model run."""
+    request_id = uuid.uuid4().hex
     if not verify_csrf_token(request, x_csrf_token):
         raise HTTPException(status_code=403, detail="Invalid or missing CSRF token.")
     if payload.horizonWeeks not in SUPPORTED_HORIZONS:
@@ -163,12 +173,35 @@ async def predict_ward(
             detail=f"Unsupported forecast horizon; choose one of {SUPPORTED_HORIZONS} weeks.",
         )
     try:
-        return generate_forecast(
+        result = generate_forecast(
             payload.city,
             payload.ward,
             payload.horizonWeeks,
             payload.asOf.isoformat() if payload.asOf else None,
+            strict_evaluation=payload.strictEvaluation,
         )
+        result["requestId"] = request_id
+        logger.info(
+            "forecast request_id=%s city=%s ward=%s horizon_weeks=%s origin=%s mode=%s "
+            "model=%s experiment=%s features=%s expected_features=%s missing_features=%s "
+            "raw_prediction=%s expected_prediction=%s rounded_prediction=%s freshness=%s",
+            request_id,
+            result.get("city"),
+            result.get("wardId"),
+            result.get("horizonWeeks"),
+            result.get("forecastOrigin"),
+            result.get("mode"),
+            result.get("model"),
+            result.get("experimentId"),
+            result.get("modelInputFeatureCount"),
+            result.get("expectedFeatureCount"),
+            result.get("missingFeatureCount"),
+            result.get("rawPredictedCases"),
+            result.get("expectedPredictedCases"),
+            result.get("predictedCases"),
+            result.get("dataFreshness"),
+        )
+        return result
     except (FileNotFoundError, ForecastUnavailableError, ModelUnavailableError) as exc:
         raise HTTPException(
             status_code=503,
@@ -177,6 +210,11 @@ async def predict_ward(
     except (LookupError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception(
+            "forecast request failed request_id=%s city=%s ward=%s horizon_weeks=%s origin=%s",
+            request_id, payload.city, payload.ward, payload.horizonWeeks,
+            payload.asOf.isoformat() if payload.asOf else None,
+        )
         raise HTTPException(
             status_code=500,
             detail="Prediction failed because the model or processed data could not be used.",
@@ -218,6 +256,7 @@ async def login_page(request: Request):
         context={
             "csrf_token": csrf_token,
         },
+        headers={"Cache-Control": "no-store, private"},
     )
 
 
@@ -236,6 +275,7 @@ async def register_page(request: Request):
         context={
             "csrf_token": csrf_token,
         },
+        headers={"Cache-Control": "no-store, private"},
     )
 
 
@@ -254,14 +294,12 @@ async def user_dashboard(
     model_horizons = get_available_horizons()
     data_through = None
     freshness = None
-    replay_origins = {}
+    date_bounds = {}
     try:
         areas = get_supported_areas()
         data_through = get_data_through()
         freshness = data_freshness()
-        replay_origins = {
-            horizon: replay_origin_bounds(horizon) for horizon in model_horizons
-        }
+        date_bounds = get_supported_date_bounds()
     except (FileNotFoundError, ValueError, ForecastUnavailableError):
         areas = {}
         data_error = "Processed ward data is unavailable or invalid. Check the server configuration."
@@ -277,8 +315,9 @@ async def user_dashboard(
             "model_horizons": model_horizons,
             "data_through": data_through,
             "freshness": freshness,
-            "replay_origins": replay_origins,
+            "date_bounds": date_bounds,
         },
+        headers={"Cache-Control": "no-store, private"},
     )
 
 
@@ -338,6 +377,7 @@ async def admin_dashboard(
             "inactive_accounts": inactive_accounts,
             "users": users,
         },
+        headers={"Cache-Control": "no-store, private"},
     )
 
 
@@ -504,4 +544,3 @@ async def admin_system_status(
 # --------------------------------------------------
 
 Base.metadata.create_all(bind=engine)
-

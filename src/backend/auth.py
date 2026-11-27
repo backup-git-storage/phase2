@@ -300,9 +300,13 @@ def login_user(
 
     # 1. Verify CSRF token.
     if not verify_csrf_token(request, csrf_token):
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid security token. Reload the page and try again.",
+        # Browser form submissions can outlive their signed session cookie
+        # (for example, when a stale tab or cached login page is submitted).
+        # Reject the request, then return the browser to a page with a fresh
+        # token instead of displaying a raw JSON error document.
+        return redirect_with_message(
+            "/login",
+            error="Your login page expired. Please try again.",
         )
 
     # 2. Normalize email.

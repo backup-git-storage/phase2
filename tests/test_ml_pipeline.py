@@ -14,7 +14,7 @@ from src.feature_engineering import FEATURE_COLUMNS, construct_targets, validate
 from src.preprocessing import build_candidate, fit_candidate, predict_candidate
 from src.risk_engine import classify_risk, risk_thresholds
 from src.train import (
-    SplitConfig, calculate_metrics, eligible_training_rows, run_training,
+    SplitConfig, calculate_metrics, display_case_count, eligible_training_rows, run_training,
     seasonal_naive_predictions, select_candidate,
 )
 from src.validation import validate_dataset
@@ -147,6 +147,55 @@ def test_candidate_selection_includes_persistence_and_prefers_it_on_ties() -> No
     assert select_candidate(candidates)[1] == "persistence"
     tied = [(0.7, "catboost", object(), {}), (0.7, "persistence", None, {})]
     assert select_candidate(tied)[1] == "persistence"
+
+
+def test_display_case_count_keeps_nonnegative_half_up_rounding_and_rejects_nonfinite() -> None:
+    for prediction, expected in (
+        (0.15, 0), (0.42, 0), (0.50, 1), (0.80, 1),
+        (1.20, 1), (10.87, 11), (-0.8, 0),
+    ):
+        assert display_case_count(prediction) == expected
+    for prediction in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="finite"):
+            display_case_count(prediction)
+
+
+def test_replay_default_prefers_august_18_for_each_horizon(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        forecast_service,
+        "replay_origins",
+        lambda horizon: ["2025-08-04", "2025-08-18", "2025-09-15"],
+    )
+    for horizon in (2, 3, 4):
+        bounds = forecast_service.replay_origin_bounds(horizon)
+        assert bounds["default"] == "2025-08-18"
+        assert "2025-08-18" in bounds["available"]
+
+
+def test_replay_default_uses_nearest_valid_origin_when_preferred_date_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        forecast_service,
+        "replay_origins",
+        lambda _horizon: ["2025-08-04", "2025-09-01"],
+    )
+    assert forecast_service.replay_origin_bounds(3)["default"] == "2025-08-04"
+
+
+def test_available_horizons_depend_on_saved_models_not_test_prediction_csvs(monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded: list[int] = []
+
+    def load_saved_bundle(horizon: int) -> dict:
+        loaded.append(horizon)
+        return {"horizon_weeks": horizon}
+
+    monkeypatch.setattr(forecast_service, "load_model_bundle", load_saved_bundle)
+    monkeypatch.setattr(
+        forecast_service,
+        "replay_origins",
+        lambda _horizon: (_ for _ in ()).throw(AssertionError("flexible mode must not require saved test origins")),
+    )
+    assert forecast_service.get_available_horizons() == [2, 3, 4]
+    assert loaded == [2, 3, 4]
 
 
 def test_seasonal_naive_uses_target_date_minus_52_weeks() -> None:
@@ -337,9 +386,12 @@ def test_inference_uses_artifact_schema_origin_and_real_ward_records(
     forecast_service._load_replay_predictions.cache_clear()
 
     class FixedModel:
+        inputs: list[pd.DataFrame] = []
+
         def predict(self, matrix: pd.DataFrame) -> np.ndarray:
             assert list(matrix.columns) == list(FEATURE_COLUMNS)
-            return np.array([2.5])
+            self.inputs.append(matrix.copy())
+            return np.array([float(matrix["dengue_cases_lag_1w"].iloc[0])])
 
     original_load_model_bundle = forecast_service.load_model_bundle
     monkeypatch.setattr(
@@ -359,18 +411,38 @@ def test_inference_uses_artifact_schema_origin_and_real_ward_records(
     try:
         areas = forecast_service.get_supported_areas()
         assert areas == {"City-0": ["ward-0"], "City-1": ["ward-1"]}
+        date_bounds = forecast_service.get_supported_date_bounds()
+        ward_dates = pd.to_datetime(processed.loc[processed.ward_id == "ward-0", "date"]).sort_values().reset_index(drop=True)
+        assert date_bounds["areas"]["City-0"]["ward-0"] == {
+            "min": ward_dates.iloc[7].date().isoformat(),
+            "max": ward_dates.iloc[-1].date().isoformat(),
+        }
 
-        result = forecast_service.generate_forecast("City-0", "ward-0", 2, origin)
-        assert result["predictedCases"] == 3
-        assert result["rawPredictedCases"] == 2.5
+        requested_date = (pd.Timestamp(origin) + pd.Timedelta(days=2)).date().isoformat()
+        result = forecast_service.generate_forecast("City-0", "ward-0", 2, requested_date)
+        origin_features = processed.loc[
+            (processed.ward_id == "ward-0") & (processed.date == origin),
+            list(FEATURE_COLUMNS),
+        ].iloc[0]
+        expected_raw = float(origin_features["dengue_cases_lag_1w"])
+        assert result["predictedCases"] == display_case_count(expected_raw)
+        assert result["rawPredictedCases"] == expected_raw
+        assert result["expectedPredictedCases"] == expected_raw
+        assert result["rawPredictionIsClipped"] is False
+        assert result["modelInputFeatureCount"] == result["expectedFeatureCount"] == len(FEATURE_COLUMNS)
+        assert result["missingFeatureCount"] == 0
         assert result["horizonWeeks"] == 2
+        assert result["requestedAsOf"] == requested_date
         assert result["observationDate"] == origin
         assert result["targetDate"] == (pd.Timestamp(origin) + pd.Timedelta(weeks=2)).date().isoformat()
         assert result["actualCases"] is not None
         assert result["dataIsHistorical"] is True
-        assert result["historicalReplayPartition"] == "test"
-        assert result["modelTrainingDataCutoff"] == origin
-        assert result["modelTrainingDataCutoff"] < pd.to_datetime(processed.date).max().date().isoformat()
+        assert result["isHistoricalReplay"] is False
+        assert result["isRetrospectiveEstimate"] is True
+        assert "not a leakage-safe historical backtest" in result["predictionWarning"]
+        assert result["historicalReplayPartition"] is None
+        assert result["modelTrainingDataThrough"] == pd.to_datetime(processed.date).max().date().isoformat()
+        assert result["modelTrainingDataCutoff"] == pd.to_datetime(processed.date).max().date().isoformat()
         assert "not clinically validated" in result["riskWarning"]
         ward_history = processed.loc[
             (processed.ward_id == "ward-0") & (pd.to_datetime(processed.date) <= pd.Timestamp(origin)),
@@ -378,16 +450,66 @@ def test_inference_uses_artifact_schema_origin_and_real_ward_records(
         ]
         assert result["riskThresholds"] == risk_thresholds(ward_history)
         assert result["dataFreshness"] == "stale"
+        assert len(FixedModel.inputs[-1]) == 1
+        assert list(FixedModel.inputs[-1].columns) == list(FEATURE_COLUMNS)
+
+        strict = forecast_service.generate_forecast(
+            "City-0", "ward-0", 2, origin, strict_evaluation=True,
+        )
+        assert strict["rawPredictedCases"] == 2.5
+        assert strict["isHistoricalReplay"] is True
+        assert strict["isRetrospectiveEstimate"] is False
+        assert strict["historicalReplayPartition"] == "test"
+        assert strict["modelTrainingDataThrough"] == origin
+
+        future_modified = processed.copy()
+        future_mask = pd.to_datetime(future_modified.date) > pd.Timestamp(origin)
+        future_modified["dengue_cases"] = pd.to_numeric(future_modified.dengue_cases)
+        future_modified["rainfall_mm"] = pd.to_numeric(future_modified.rainfall_mm)
+        future_modified.loc[future_mask, "dengue_cases"] += 10
+        future_modified.loc[future_mask, "rainfall_mm"] += 100
+        future_path = tmp_path / "future_modified_processed.csv"
+        future_modified.to_csv(future_path, index=False)
+        monkeypatch.setattr(forecast_service, "DATA_PATH", future_path)
+        forecast_service.load_raw_data.cache_clear()
+        future_independent = forecast_service.generate_forecast(
+            "City-0", "ward-0", 2, requested_date,
+        )
+        assert future_independent["rawPredictedCases"] == expected_raw
+        assert future_independent["observationDate"] == origin
+
+        earliest_valid = date_bounds["areas"]["City-0"]["ward-0"]["min"]
+        earliest_forecast = forecast_service.generate_forecast(
+            "City-0", "ward-0", 2, earliest_valid,
+        )
+        assert earliest_forecast["observationDate"] == earliest_valid
+        latest_valid = date_bounds["areas"]["City-0"]["ward-0"]["max"]
+        latest_forecast = forecast_service.generate_forecast(
+            "City-0", "ward-0", 2, latest_valid,
+        )
+        assert latest_forecast["observationDate"] == latest_valid
+        assert latest_forecast["actualCases"] is None
+        assert latest_forecast["isRetrospectiveEstimate"] is False
+
+        other_ward_forecast = forecast_service.generate_forecast(
+            "City-1", "ward-1", 2, requested_date,
+        )
+        assert other_ward_forecast["city"] == "City-1"
+        assert other_ward_forecast["wardId"] == "ward-1"
+        assert other_ward_forecast["observationDate"] == origin
+
         with pytest.raises(forecast_service.ForecastUnavailableError, match="Current forecasting is disabled"):
             forecast_service.generate_forecast("City-0", "ward-0", 2, today=pd.Timestamp("2026-11-26").date())
-        with pytest.raises(ValueError, match="exact weekly observation"):
+        with pytest.raises(ValueError, match="insufficient feature history"):
             forecast_service.generate_forecast("City-0", "ward-0", 2, "2022-10-04")
+        with pytest.raises(ValueError, match="after the latest ward observation"):
+            forecast_service.generate_forecast("City-0", "ward-0", 2, "2025-12-31")
         unsupported_test_origin = (pd.Timestamp("2022-10-03") + pd.Timedelta(weeks=12)).date().isoformat()
-        with pytest.raises(ValueError, match="held-out rolling-origin test weeks"):
-            forecast_service.generate_forecast("City-0", "ward-0", 2, unsupported_test_origin)
+        with pytest.raises(ValueError, match="saved held-out rolling-origin test weeks"):
+            forecast_service.generate_forecast("City-0", "ward-0", 2, unsupported_test_origin, strict_evaluation=True)
         last_origin = (pd.Timestamp("2022-10-03") + pd.Timedelta(weeks=15)).date().isoformat()
         with pytest.raises(ValueError, match="target week is not in the dataset"):
-            forecast_service.generate_forecast("City-0", "ward-0", 2, last_origin)
+            forecast_service.generate_forecast("City-0", "ward-0", 2, last_origin, strict_evaluation=True)
 
         with pytest.raises(LookupError, match="Unknown ward"):
             forecast_service.generate_forecast("City-0", "unknown", 2)

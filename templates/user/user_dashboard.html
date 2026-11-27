@@ -19,7 +19,7 @@
     rel="stylesheet"
   >
   <link rel="stylesheet" href="/static/css/user/user_dashboard.css?v=8">
-  <script src="/static/js/user/user.js?v=8" defer></script>
+    <script src="/static/js/user/user.js?v=10" defer></script>
 </head>
 
 <body class="dashboard-page">
@@ -160,7 +160,7 @@
             </div>
           </div>
 
-          <form id="forecastForm" data-available-horizons='{{ model_horizons|tojson|forceescape }}' data-replay-bounds='{{ replay_origins|tojson|forceescape }}' novalidate>
+          <form id="forecastForm" data-available-horizons='{{ model_horizons|tojson|forceescape }}' data-date-bounds='{{ date_bounds|tojson|forceescape }}' novalidate>
             <div class="selector-grid">
               <div class="form-field">
                 <label for="citySelect">City</label>
@@ -199,8 +199,9 @@
             </fieldset>
 
             <div class="form-field origin-field">
-              <label for="asOfDate">Held-out historical replay origin week</label>
-              <input id="asOfDate" name="asOf" type="date" {% if model_horizons %}min="{{ replay_origins[model_horizons[0]].min }}" max="{{ replay_origins[model_horizons[0]].max }}" value="{{ replay_origins[model_horizons[0]].default }}"{% else %}disabled{% endif %} required>
+              <label for="asOfDate">Forecast date (choose any available calendar date)</label>
+              <input id="asOfDate" name="asOf" type="date" {% if date_bounds %}min="{{ date_bounds.min }}" max="{{ date_bounds.max }}" value="{{ date_bounds.max }}"{% else %}disabled{% endif %} required>
+              <small class="date-resolution-help" id="dateResolutionHelp">A date between weekly observations resolves to the latest observation on or before your selected date. Historical estimates can be retrospective when the selected model was trained through a later date.</small>
               <label class="current-forecast-toggle" for="currentMode">
                 <input id="currentMode" name="currentMode" type="checkbox" {% if not freshness or not freshness.currentForecastAvailable %}disabled{% endif %}>
                 Use latest data for a current forecast
@@ -274,9 +275,12 @@
           <div class="result-success" id="forecastSuccess" hidden>
             <div class="prediction-cards">
               <article class="prediction-card">
-                <span>Predicted new dengue cases for target reporting week</span>
-                <strong id="predictedCases">—</strong>
+                <span>Expected new dengue cases for target reporting week</span>
+                <strong id="expectedPredictedCases">—</strong>
+                <small id="roundedPredictedCases">Rounded case estimate: — cases</small>
+                <small id="rawModelOutput" hidden></small>
                 <small id="predictionPeriod">Awaiting forecast</small>
+                <small id="predictionModel">Selected model: —</small>
               </article>
               <article class="prediction-card">
                 <span>Risk category</span>
