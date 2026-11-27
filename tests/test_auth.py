@@ -588,7 +588,7 @@ def test_public_registration_cannot_create_admin(auth_context):
 
 
 def test_login_rejects_invalid_csrf(auth_context):
-    """Login must reject an invalid CSRF token."""
+    """Login rejects stale CSRF but recovers with a fresh uncached page."""
 
     client, session_factory = auth_context
     create_test_user(session_factory)
@@ -603,7 +603,8 @@ def test_login_rejects_invalid_csrf(auth_context):
         follow_redirects=False,
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/login?error=")
     assert client.get("/_test/session").json()["user_id"] is None
 
 

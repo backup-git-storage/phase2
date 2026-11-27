@@ -61,6 +61,33 @@ def get_supported_areas() -> dict[str, list[str]]:
             for city, group in data.groupby("city", sort=True, observed=True)}
 
 
+def get_supported_date_bounds() -> dict:
+    """Return valid per-ward forecast date bounds from actual feature rows.
+
+    A ward needs at least MIN_HISTORY_WEEKS complete processed observations;
+    its first eligible forecast date is therefore the corresponding row within
+    that ward, rather than a hardcoded calendar date shared by every ward.
+    """
+    data = load_raw_data()
+    areas: dict[str, dict[str, dict[str, str]]] = {}
+    for (city, ward_id), group in data.groupby(["city", "ward_id"], sort=True, observed=True):
+        dates = pd.to_datetime(group["date"], errors="raise").sort_values().reset_index(drop=True)
+        if len(dates) < MIN_HISTORY_WEEKS:
+            continue
+        areas.setdefault(str(city), {})[str(ward_id)] = {
+            "min": dates.iloc[MIN_HISTORY_WEEKS - 1].date().isoformat(),
+            "max": dates.iloc[-1].date().isoformat(),
+        }
+    if not areas:
+        raise ForecastUnavailableError("No ward has enough processed history for forecasting")
+    all_bounds = [bounds for city_bounds in areas.values() for bounds in city_bounds.values()]
+    return {
+        "min": min(bounds["min"] for bounds in all_bounds),
+        "max": max(bounds["max"] for bounds in all_bounds),
+        "areas": areas,
+    }
+
+
 def data_freshness(today: date | None = None) -> dict:
     data_through = load_raw_data()["date"].max().date()
     today = today or date.today()
@@ -88,8 +115,6 @@ def get_available_horizons() -> list[int]:
     for horizon in SUPPORTED_HORIZONS:
         try:
             load_model_bundle(horizon)
-            if not replay_origins(horizon):
-                continue
         except (FileNotFoundError, ModelUnavailableError, ValueError, OSError, json.JSONDecodeError):
             continue
         available.append(horizon)
@@ -107,7 +132,16 @@ def replay_origin_bounds(horizon_weeks: int) -> dict[str, str | list[str]]:
     origins = replay_origins(horizon_weeks)
     if not origins:
         raise ForecastUnavailableError("No leakage-safe rolling-origin test replays are available for this horizon")
-    return {"min": origins[0], "max": origins[-1], "default": origins[-1], "available": origins}
+    preferred = date(2025, 8, 18)
+    default = min(
+        origins,
+        key=lambda value: (
+            abs((date.fromisoformat(value) - preferred).days),
+            date.fromisoformat(value) > preferred,
+            value,
+        ),
+    )
+    return {"min": origins[0], "max": origins[-1], "default": default, "available": origins}
 
 
 def _run_directory(horizon_weeks: int) -> Path:
@@ -282,14 +316,19 @@ def _format_observation(row: pd.Series) -> dict:
 def generate_forecast(
     city: str, ward_id: str, horizon_weeks: int,
     as_of: str | None = None, today: date | None = None,
+    *, strict_evaluation: bool = False,
 ) -> dict:
-    """Generate a current forecast or an explicitly historical, scored replay.
+    """Predict from a saved bundle at a current or user-selected date.
 
-    Historical `as_of` dates must exactly match a weekly record and the target
-    observation must exist. A stale dataset never generates a current forecast.
+    Flexible historical inference resolves a calendar date to that ward's
+    latest processed feature row on or before the date. Strict evaluation is
+    opt-in and serves only the immutable saved held-out rolling-origin row.
+    Neither path fits a model.
     """
     if horizon_weeks not in SUPPORTED_HORIZONS:
         raise ValueError(f"Unsupported horizon; choose one of {SUPPORTED_HORIZONS} weeks")
+    if strict_evaluation and as_of is None:
+        raise ValueError("Strict evaluation requires an explicit saved test-origin date")
     data = load_raw_data()
     area_map = get_supported_areas()
     if city not in area_map:
@@ -299,32 +338,46 @@ def generate_forecast(
     if ward_id not in area_map[city]:
         raise LookupError("Ward does not belong to the selected city")
     ward_data = data.loc[data.ward_id.astype(str).eq(str(ward_id))].sort_values("date")
+    ward_dates = pd.to_datetime(ward_data["date"], errors="raise").reset_index(drop=True)
+    if len(ward_dates) < MIN_HISTORY_WEEKS:
+        raise ValueError("Insufficient processed weekly history for this ward")
+    minimum_valid_date = ward_dates.iloc[MIN_HISTORY_WEEKS - 1]
+    latest_available_date = ward_dates.iloc[-1]
     cutoff = data["date"].max()
     freshness = data_freshness(today)
+    requested_date: pd.Timestamp | None = None
     historical = as_of is not None
     if historical:
         try:
-            origin = pd.Timestamp(date.fromisoformat(as_of))
+            requested_date = pd.Timestamp(date.fromisoformat(as_of))
         except (TypeError, ValueError) as exc:
-            raise ValueError("Forecast origin must be a valid YYYY-MM-DD weekly observation date") from exc
+            raise ValueError("Forecast date must be a valid YYYY-MM-DD calendar date") from exc
+        if requested_date < minimum_valid_date:
+            raise ValueError(
+                f"This ward has insufficient feature history before {minimum_valid_date.date().isoformat()}"
+            )
+        if requested_date > latest_available_date:
+            raise ValueError(
+                f"Forecast date is after the latest ward observation ({latest_available_date.date().isoformat()})"
+            )
+        eligible = ward_data.loc[ward_data.date.le(requested_date)]
+        if len(eligible) < MIN_HISTORY_WEEKS:
+            raise ValueError("Insufficient historical observations are available at the selected date")
+        origin = pd.Timestamp(eligible.date.max())
         origin_rows = ward_data.loc[ward_data.date.eq(origin)]
-        if origin_rows.empty:
-            raise ValueError("Forecast origin is unsupported; choose an exact weekly observation date")
     else:
         if freshness["status"] == "stale":
             raise ForecastUnavailableError(freshness["message"])
-        origin = ward_data.date.max()
+        origin = pd.Timestamp(latest_available_date)
         origin_rows = ward_data.loc[ward_data.date.eq(origin)]
-    if len(ward_data.loc[ward_data.date.le(origin)]) < MIN_HISTORY_WEEKS:
-        raise ValueError("Insufficient weekly history before the selected forecast origin")
+    if strict_evaluation and requested_date != origin:
+        raise ValueError("Strict evaluation requires an exact weekly held-out test origin")
 
     latest = origin_rows.iloc[-1]
     target_date = origin + pd.Timedelta(weeks=horizon_weeks)
     target_rows = ward_data.loc[ward_data.date.eq(target_date)]
-    if historical and target_rows.empty:
-        raise ValueError("Historical replay target week is not in the dataset; choose an earlier origin")
-    if not historical and target_date <= origin:
-        raise ValueError("Target observation date must be after the forecast origin")
+    if strict_evaluation and target_rows.empty:
+        raise ValueError("Strict evaluation target week is not in the dataset")
 
     try:
         bundle = load_model_bundle(horizon_weeks)
@@ -333,9 +386,10 @@ def generate_forecast(
     except ModelUnavailableError:
         raise
     family = bundle["model_family"]
-    model_training_cutoff = str(bundle["training_data_cutoff"])
+    experiment_id = _run_directory(horizon_weeks).name
+    model_training_through = str(bundle["training_data_cutoff"])
     replay_partition = None
-    if historical:
+    if strict_evaluation:
         saved_predictions = _load_replay_predictions(horizon_weeks)
         replay_rows = saved_predictions.loc[
             saved_predictions.ward_id.astype(str).eq(str(ward_id))
@@ -358,7 +412,7 @@ def generate_forecast(
         ):
             raise ModelUnavailableError("Saved replay prediction does not match the origin, target, or available-label contract")
         raw_prediction = float(replay.prediction)
-        model_training_cutoff = label_cutoff.date().isoformat()
+        model_training_through = label_cutoff.date().isoformat()
         replay_partition = str(replay.partition)
     else:
         matrix = pd.DataFrame([latest[list(bundle["feature_names"])]], columns=bundle["feature_names"])
@@ -397,23 +451,45 @@ def generate_forecast(
         if not rain_row.empty:
             rainfall_context = {"date": target_rain_date.date().isoformat(), "rainfall_mm": float(rain_row.iloc[0].rainfall_mm)}
     available_historical_target = None if target_rows.empty else float(target_rows.iloc[0].dengue_cases)
+    retrospective = bool(historical and pd.Timestamp(model_training_through) > origin)
+    prediction_warning = (
+        "Retrospective historical estimate — not a leakage-safe historical backtest."
+        if retrospective else None
+    )
     warnings = [risk["warning"]]
     if freshness["status"] == "stale":
         warnings.insert(0, freshness["message"])
     if target_rain_date > origin:
         warnings.append("Rainfall approximately three weeks before the target would occur after this origin and is unavailable; no future rainfall was used.")
+    if prediction_warning:
+        warnings.insert(0, prediction_warning)
+    mode = (
+        "strict_evaluation_replay" if strict_evaluation
+        else "flexible_historical_prediction" if historical
+        else "current_forecast"
+    )
     return {
         "city": str(city), "wardId": str(ward_id),
         "horizonWeeks": horizon_weeks, "targetDefinition": TARGET_DEFINITION,
-        "predictedCases": predicted_count, "rawPredictedCases": nonnegative_raw,
+        "predictedCases": predicted_count, "rawPredictedCases": raw_prediction,
+        "expectedPredictedCases": nonnegative_raw,
+        # Historical evaluation CSVs retain the continuous prediction after
+        # the training pipeline's non-negative constraint. The pre-constraint
+        # estimator output was not persisted for those folds.
+        "rawPredictionIsClipped": strict_evaluation,
         "riskCategory": risk["level"], "riskMethod": risk["method"],
         "riskThresholds": risk["thresholds"], "riskWarning": risk["warning"],
+        "requestedAsOf": requested_date.date().isoformat() if requested_date is not None else None,
         "observationDate": origin.date().isoformat(), "forecastOrigin": origin.date().isoformat(),
         "targetDate": target_date.date().isoformat(), "targetReportingWeek": target_date.date().isoformat(),
         "actualCases": available_historical_target,
         "dataThrough": cutoff.date().isoformat(), "dataFreshness": freshness["status"],
-        "dataAgeDays": freshness["ageDays"], "mode": "historical_replay" if historical else "current_forecast",
+        "dataAgeDays": freshness["ageDays"], "mode": mode,
         "dataIsHistorical": historical, "warnings": warnings,
+        "isHistoricalReplay": strict_evaluation,
+        "isRetrospectiveEstimate": retrospective,
+        "dataFreshnessStatus": freshness["status"],
+        "predictionWarning": prediction_warning,
         "drivers": describe_drivers(history_available, latest),
         "rainfallTiming": {
             "target_minus_three_weeks": rainfall_context,
@@ -429,7 +505,12 @@ def generate_forecast(
         },
         "history": [_format_observation(row) for row in history_available.tail(16).itertuples(index=False)],
         "forecast": [{"date": target_date.date().isoformat(), "cases": predicted_count}],
-        "model": family, "modelTrainingDataCutoff": model_training_cutoff,
+        "model": family, "experimentId": experiment_id,
+        "modelInputFeatureCount": len(bundle["feature_names"]),
+        "expectedFeatureCount": len(bundle["feature_names"]),
+        "missingFeatureCount": 0,
+        "modelTrainingDataCutoff": model_training_through,
+        "modelTrainingDataThrough": model_training_through,
         "historicalReplayPartition": replay_partition,
         "modelPerformance": get_model_performance(horizon_weeks),
         "modelHorizonWeeks": int(bundle["horizon_weeks"]),

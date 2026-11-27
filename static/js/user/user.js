@@ -75,6 +75,8 @@ const chartContent = document.getElementById("chartContent");
 const asOfDate = document.getElementById("asOfDate");
 const currentMode = document.getElementById("currentMode");
 let requestSequence = 0;
+let activeForecastController = null;
+const FORECAST_TIMEOUT_MS = 30000;
 
 function availableHorizons() {
     try {
@@ -84,9 +86,9 @@ function availableHorizons() {
     }
 }
 
-function replayBounds() {
+function dateBounds() {
     try {
-        return JSON.parse(forecastForm.dataset.replayBounds || "{}");
+        return JSON.parse(forecastForm.dataset.dateBounds || "{}");
     } catch (_) {
         return {};
     }
@@ -96,27 +98,30 @@ function selectedHorizon() {
     return Number(forecastForm.querySelector('input[name="horizon"]:checked')?.value);
 }
 
-function updateOriginBounds() {
-    const bounds = replayBounds()[String(selectedHorizon())];
-    if (!bounds) return;
+function updateDateBounds() {
+    const allBounds = dateBounds();
+    const areaBounds = allBounds.areas?.[citySelect.value]?.[wardSelect.value];
+    const bounds = areaBounds || { min: allBounds.min, max: allBounds.max };
+    if (!bounds.min || !bounds.max) return;
     asOfDate.min = bounds.min;
     asOfDate.max = bounds.max;
-    if (!Array.isArray(bounds.available) || !bounds.available.includes(asOfDate.value)) {
-        asOfDate.value = bounds.default;
+    if (!asOfDate.value || asOfDate.value < bounds.min || asOfDate.value > bounds.max) {
+        asOfDate.value = bounds.max;
     }
 }
 
-function refreshControlAvailability(isLoading = false) {
+function refreshControlAvailability() {
     const available = availableHorizons();
     forecastForm.querySelectorAll('input[name="horizon"]').forEach((input) => {
-        input.disabled = isLoading || !available.includes(Number(input.value));
+        input.disabled = !available.includes(Number(input.value));
     });
-    citySelect.disabled = isLoading || !citySelect.options.length || citySelect.options.length <= 1;
-    wardSelect.disabled = isLoading || !citySelect.value || wardSelect.options.length <= 1;
-    currentMode.disabled = isLoading || currentMode.dataset.available !== "true";
-    asOfDate.disabled = isLoading || currentMode.checked || available.length === 0;
+    citySelect.disabled = !citySelect.options.length || citySelect.options.length <= 1;
+    wardSelect.disabled = !citySelect.value || wardSelect.options.length <= 1;
+    currentMode.disabled = currentMode.dataset.available !== "true";
+    asOfDate.disabled = currentMode.checked || available.length === 0;
     asOfDate.required = !currentMode.checked;
-    generateButton.disabled = isLoading || available.length === 0 || !citySelect.value || !wardSelect.value;
+    generateButton.disabled = forecastResults.getAttribute("aria-busy") === "true"
+        || available.length === 0 || !citySelect.value || !wardSelect.value;
 }
 
 function populateWards() {
@@ -150,7 +155,7 @@ function setForecastState(state, message = "") {
     driverList.hidden = state !== "success";
     chartEmpty.hidden = state === "success";
     chartContent.hidden = state !== "success";
-    refreshControlAvailability(isLoading);
+    refreshControlAvailability();
     buttonSpinner.hidden = !isLoading;
     buttonLabel.textContent = isLoading ? "Preparing forecast" : "Generate forecast";
 
@@ -175,23 +180,35 @@ function clearForecast() {
     setForecastState("empty");
 }
 
-citySelect.addEventListener("change", () => {
-    populateWards();
+function invalidatePendingForecast() {
     requestSequence += 1;
+    if (activeForecastController) {
+        activeForecastController.abort();
+        activeForecastController = null;
+    }
+}
+
+citySelect.addEventListener("change", () => {
+    invalidatePendingForecast();
+    populateWards();
+    updateDateBounds();
     clearForecast();
 });
 
-wardSelect.addEventListener("change", () => { requestSequence += 1; clearForecast(); });
+wardSelect.addEventListener("change", () => {
+    invalidatePendingForecast();
+    updateDateBounds();
+    clearForecast();
+});
 forecastForm.querySelectorAll('input[name="horizon"]').forEach((input) => {
     input.addEventListener("change", () => {
-        updateOriginBounds();
-        requestSequence += 1;
+        invalidatePendingForecast();
         clearForecast();
     });
 });
 currentMode.addEventListener("change", () => {
+    invalidatePendingForecast();
     refreshControlAvailability();
-    requestSequence += 1;
     clearForecast();
 });
 
@@ -297,8 +314,14 @@ function drawForecastChart(history, forecast, selection) {
 }
 
 function renderForecastResult(result, selection) {
+    const expectedPrediction = Number.isFinite(result?.expectedPredictedCases)
+        ? result.expectedPredictedCases
+        : Math.max(0, result?.rawPredictedCases);
     if (
         !result
+        || !Number.isFinite(result.rawPredictedCases)
+        || !Number.isFinite(expectedPrediction)
+        || expectedPrediction < 0
         || !Number.isFinite(result.predictedCases)
         || result.predictedCases < 0
         || !Number.isInteger(result.predictedCases)
@@ -317,6 +340,16 @@ function renderForecastResult(result, selection) {
         || result.horizonWeeks !== selection.horizonWeeks) {
         throw new Error("The forecast response does not match the selected horizon and target week.");
     }
+    if (selection.asOf) {
+        const requested = Date.parse(`${selection.asOf}T00:00:00Z`);
+        const resolved = Date.parse(`${result.observationDate}T00:00:00Z`);
+        const target = Date.parse(`${result.targetDate}T00:00:00Z`);
+        if (result.requestedAsOf !== selection.asOf || resolved > requested
+            || requested - resolved >= 7 * 24 * 60 * 60 * 1000
+            || target - resolved !== selection.horizonWeeks * 7 * 24 * 60 * 60 * 1000) {
+            throw new Error("The selected calendar date did not resolve to the expected weekly forecast origin.");
+        }
+    }
     const drivers = [
         ["rainfallDriver", result.drivers.rainfall],
         ["temperatureDriver", result.drivers.temperature],
@@ -328,17 +361,37 @@ function renderForecastResult(result, selection) {
         throw new Error("The forecast service returned incomplete driver explanations.");
     }
 
-    document.getElementById("predictedCases").textContent =
-        new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
-            .format(result.predictedCases);
+    document.getElementById("expectedPredictedCases").textContent =
+        new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            .format(expectedPrediction);
+    document.getElementById("roundedPredictedCases").textContent =
+        `Rounded case estimate: ${new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
+            .format(result.predictedCases)} cases`;
+    const rawModelOutput = document.getElementById("rawModelOutput");
+    rawModelOutput.hidden = !(result.rawPredictedCases < 0 && !result.rawPredictionIsClipped);
+    rawModelOutput.textContent = rawModelOutput.hidden
+        ? ""
+        : `Raw model output before the non-negative case-count constraint: ${new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(result.rawPredictedCases)} cases`;
     document.getElementById("riskCategory").textContent = result.riskCategory;
     document.getElementById("riskCategory").dataset.risk = result.riskCategory;
     document.getElementById("predictionPeriod").textContent =
         `${selection.horizonWeeks}-week horizon · target reporting week: ${formatDate(result.targetDate)}`;
+    document.getElementById("predictionModel").textContent =
+        `Selected model: ${result.model} · ${selection.horizonWeeks}-week horizon · backend: ${result.predictionBackend || "phase2"}`;
+    const forecastKind = result.isHistoricalReplay
+        ? "Leakage-safe held-out backtest replay"
+        : result.isRetrospectiveEstimate
+            ? "Retrospective historical estimate"
+            : selection.asOf
+                ? "Historical estimate"
+                : "Current forecast";
+    const requestedDateText = result.requestedAsOf
+        ? `requested date: ${formatDate(result.requestedAsOf)} · `
+        : "";
     document.getElementById("observationDate").textContent =
-        `${result.mode === "historical_replay" ? "Historical replay" : "Current forecast"} · ${selection.city}, ${wardSelect.selectedOptions[0].textContent} · origin: ${formatDate(result.forecastOrigin || result.observationDate)} · data through: ${formatDate(result.dataThrough)} · ${result.model}`;
+        `${forecastKind} · ${selection.city}, ${wardSelect.selectedOptions[0].textContent} · ${requestedDateText}resolved observation: ${formatDate(result.observationDate)} · target week: ${formatDate(result.targetDate)} · model training data through: ${formatDate(result.modelTrainingDataThrough || result.modelTrainingDataCutoff)} · ${result.model}`;
     const riskWarning = document.getElementById("riskWarning");
-    riskWarning.textContent = [result.riskWarning, ...(result.warnings || []).filter((warning) => warning !== result.riskWarning)].join(" ")
+    riskWarning.textContent = [result.predictionWarning, result.riskWarning, ...(result.warnings || []).filter((warning) => warning !== result.riskWarning && warning !== result.predictionWarning)].filter(Boolean).join(" ")
         || "Experimental ward-relative classifications; not clinically validated public-health alerts.";
     riskWarning.hidden = false;
     if (result.actualCases !== null && Number.isFinite(result.actualCases)) {
@@ -423,11 +476,12 @@ function renderModelPerformance(performance, horizon) {
     note.textContent = `${performance.model} · ${horizon}-week model · validation MAE ${number(performance.validationMae)} · test origins ${formatDate(performance.originStart)} to ${formatDate(performance.originEnd)}; targets ${formatDate(performance.targetStart)} to ${formatDate(performance.targetEnd)}. Historical rolling-origin estimates only.`;
 }
 
-async function requestForecast(selection) {
+async function requestForecast(selection, signal) {
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content || "";
     const response = await fetch("/api/predict", {
         method: "POST",
         credentials: "same-origin",
+        signal,
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
         body: JSON.stringify({
             city: selection.city,
@@ -443,6 +497,12 @@ async function requestForecast(selection) {
         // A non-JSON server response is rendered as a generic service error.
     }
     if (!response.ok) {
+        if (response.status === 403
+            && data.detail === "Invalid or missing CSRF token.") {
+            throw new Error(
+                "Your dashboard session expired or changed. Refresh this page, sign in again if prompted, then submit the forecast again."
+            );
+        }
         const detail = typeof data.detail === "string"
             ? data.detail
             : Array.isArray(data.detail)
@@ -462,13 +522,6 @@ forecastForm.addEventListener("submit", async (event) => {
         return;
     }
 
-    const originBounds = replayBounds()[String(selectedHorizon())];
-    if (!currentMode.checked
-        && (!originBounds || !originBounds.available?.includes(asOfDate.value))) {
-        setForecastState("error", "Choose a supported held-out replay origin from the sampled backtest weeks.");
-        return;
-    }
-
     const selection = {
         city: citySelect.value,
         ward: wardSelect.value,
@@ -478,19 +531,28 @@ forecastForm.addEventListener("submit", async (event) => {
         asOf: currentMode.checked ? null : asOfDate.value,
     };
 
+    if (activeForecastController) activeForecastController.abort();
+    const controller = new AbortController();
+    activeForecastController = controller;
     const sequence = ++requestSequence;
+    const timeout = window.setTimeout(() => controller.abort(), FORECAST_TIMEOUT_MS);
     setForecastState("loading");
 
     try {
-        const result = await requestForecast(selection);
+        const result = await requestForecast(selection, controller.signal);
         if (sequence !== requestSequence) return;
         renderForecastResult(result, selection);
     } catch (error) {
         if (sequence !== requestSequence) return;
-        const message = error instanceof Error
-            ? error.message
-            : "The forecast could not be generated. No prediction was returned.";
+        const message = controller.signal.aborted
+            ? "The forecast request timed out after 30 seconds. Your division and ward selections are available; retry the forecast."
+            : error instanceof Error
+                ? error.message
+                : "The forecast could not be generated. No prediction was returned.";
         setForecastState("error", message);
+    } finally {
+        window.clearTimeout(timeout);
+        if (activeForecastController === controller) activeForecastController = null;
     }
 });
 
@@ -501,5 +563,5 @@ if (!forecastForm.querySelector('input[name="horizon"]:checked')
     if (firstAvailable) firstAvailable.checked = true;
 }
 populateWards();
-updateOriginBounds();
+updateDateBounds();
 refreshControlAvailability();

@@ -84,3 +84,9 @@ The project includes a local SQLite database file where supplied and will not re
 ## Forecast data status
 
 The bundled dengue dataset ends on 2025-12-29. With the current freshness policy, live/current forecasting is disabled until recent weekly data is supplied. The dashboard can still demonstrate held-out historical replay; label it as historical replay, not live surveillance.
+
+## Reference CatBoost backend
+
+This branch uses the independent reference-style CatBoost backend by default. The three 50-iteration model artifacts and their ordered feature metadata are stored in `runs/reference_catboost_20261126T215839_759578Z/`. The API supports 2-, 3-, and 4-week forecasts. See [REFERENCE_CATBOOST.md](REFERENCE_CATBOOST.md) for the feature contract, chronological evaluation results, historical-date behavior, and known differences from the reference source.
+
+Set `PREDICTION_BACKEND=phase2` in the local environment to select the preserved Phase2 prediction backend. The app does not silently fall back if the reference CatBoost artifacts are unavailable.
